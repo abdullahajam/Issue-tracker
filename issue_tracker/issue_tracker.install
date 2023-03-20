@@ -1,0 +1,367 @@
+<?php
+
+use Drupal\taxonomy\Entity\Vocabulary;
+use Drupal\taxonomy\Entity\Term;
+
+/**
+ * Implements hook_install().
+ */
+function issue_tracker_install() {
+  $content_type = 'issue';
+
+  // Create the content type.
+  $node_type = \Drupal::entityTypeManager()->getStorage('node_type')->create([
+    'type' => $content_type,
+    'name' => 'Issue',
+    'description' => 'A content type for tracking issues',
+    'new_revision' => TRUE,
+    'display_submitted' => FALSE,
+    'comment' => 2,
+  ]);
+  $node_type->save();
+
+  // Create the short description and date fields
+  $description_field_storage = \Drupal::entityTypeManager()->getStorage('field_storage_config')->create([
+    'field_name' => 'short_description',
+    'entity_type' => 'node',
+    'type' => 'text',
+    'settings' => [
+      'max_length' => 256
+    ],
+  ]);
+
+  $description_field_storage->save();
+
+  $description_field = \Drupal::entityTypeManager()->getStorage('field_config')->create([
+    'field_name' => 'short_description',
+    'entity_type' => 'node',
+    'bundle' => 'issue', // Replace 'article' with your content type machine name.
+    'label' => 'Short Description',
+    'settings' => [
+      'display_label' => TRUE,
+      'display_summary' => TRUE,
+      'required' => TRUE,
+      'max_length' => 256,
+    ],
+  ]);
+
+  $description_field->save();
+
+  $form_display = \Drupal::entityTypeManager()->getStorage('entity_form_display')->load('node.' . $content_type . '.default');
+  if (!$form_display) {
+    $form_display = \Drupal::entityTypeManager()->getStorage('entity_form_display')->create([
+      'targetEntityType' => 'node',
+      'bundle' => $content_type,
+      'mode' => 'default',
+      'status' => TRUE,
+    ]);
+    $form_display->save();
+  }
+
+  $form_display->setComponent('short_description', [
+    'type' => 'text_textfield',
+    'weight' => 20,
+  ]);
+
+  $date_field_storage = \Drupal::entityTypeManager()->getStorage('field_storage_config')->create([
+    'field_name' => 'field_due_date',
+    'entity_type' => 'node',
+    'type' => 'datetime',
+    'settings' => [
+      'datetime_type' => 'date',
+      'datetime_format' => 'Y-m-d',
+      'timezone' => 'UTC',
+    ],
+  ]);
+
+  $date_field_storage->save();
+
+  $date_field = \Drupal::entityTypeManager()->getStorage('field_config')->create([
+    'field_name' => 'field_due_date',
+    'entity_type' => 'node',
+    'bundle' => $content_type,
+    'label' => 'Due date',
+    'settings' => [
+      'display_label' => TRUE,
+      'required' => FALSE,
+      'default_value' => [
+        'value' => '2023-03-20 00:00:00',
+      ],
+    ],
+  ]);
+
+  $date_field->save();
+
+  $form_display->setComponent('field_due_date', [
+    'type' => 'datetime_default',
+    'weight' => 20,
+  ]);
+
+  // Create the comment field and attach it to the content type
+  $comment_field_storage = \Drupal::entityTypeManager()->getStorage('field_storage_config')->create([
+    'field_name' => 'field_comments',
+    'entity_type' => 'node',
+    'type' => 'comment',
+    'settings' => [
+      'default_mode' => 2,
+      'comment_type' => 'comment',
+    ],
+  ]);
+  $comment_field_storage->save();
+  
+  $comment_field = \Drupal::entityTypeManager()->getStorage('field_config')->create([
+    'field_name' => 'field_comments',
+    'entity_type' => 'node',
+    'bundle' => $content_type,
+    'label' => 'Comments',
+    'settings' => [
+      'comment_type' => 'comment',
+      'default_mode' => 1,
+      'per_page' => 50,
+    ],
+  ]);
+  $comment_field->save();
+
+  $form_display->setComponent('field_comments', [
+    'type' => 'comment_default',
+    'weight' => 20,
+  ]);
+
+  // Create the user reference fields for the content type.
+  $user_fields = [
+    'field_reporter' => 'Reporter',
+    'field_assignee' => 'Assignee',
+    'field_watchers' => 'Watchers',
+  ];
+
+  foreach ($user_fields as $user_field_name => $user_field_label) {
+    $field_storage = \Drupal::entityTypeManager()->getStorage('field_storage_config')->create([
+      'field_name' => $user_field_name,
+      'entity_type' => 'node',
+      'type' => 'entity_reference',
+      'cardinality' => $user_field_name == 'field_watchers' ? -1 : 1,
+      'settings' => [
+        'target_type' => 'user',
+      ],
+    ]);
+    $field_storage->save();
+
+    $field = \Drupal::entityTypeManager()->getStorage('field_config')->create([
+      'field_name' => $user_field_name,
+      'entity_type' => 'node',
+      'bundle' => $content_type,
+      'label' => $user_field_label,
+      'settings' => [
+        'target_type' => 'user',
+        'handler' => 'default',
+        'handler_settings' => [],
+      ],
+    ]);
+
+    // Set default value for field_reporter.
+    if ($user_field_name === 'field_reporter') {
+      $field->setDefaultValue(\Drupal::currentUser()->id());
+    }
+
+    $field->save();
+
+    $form_display->setComponent($user_field_name, [
+      'type' => 'entity_reference_autocomplete',
+      'weight' => 20,
+    ]);
+  }
+
+  $issue_type_vocabulary = Vocabulary::create([
+    'vid' => 'issue_type',
+    'name' => 'Issue Type',
+    'description' => 'Vocabulary for issue types.',
+  ]);
+  $issue_type_vocabulary->save();
+
+  // Create the issue type terms.
+  $issue_type_terms = [
+    'New feature',
+    'Change',
+    'Task',
+    'Bug',
+    'Improvement',
+  ];
+
+  foreach ($issue_type_terms as $term_name) {
+    $term = Term::create([
+      'name' => $term_name,
+      'vid' => $issue_type_vocabulary->id(),
+    ]);
+    $term->save();
+  }
+
+  $issue_priority_vocabulary = Vocabulary::create([
+    'vid' => 'priority',
+    'name' => 'Priority',
+    'description' => 'Vocabulary for issue priorities.',
+  ]);
+  $issue_priority_vocabulary->save();
+
+  // Create the issue type terms.
+  $issue_priorities_terms = [
+    'Critical',
+    'High',
+    'Low',
+    'Trivial',
+  ];
+
+  foreach ($issue_priorities_terms as $term_name) {
+    $term = Term::create([
+      'name' => $term_name,
+      'vid' => $issue_priority_vocabulary->id(),
+    ]);
+    $term->save();
+  }
+
+  $issue_status_vocabulary = Vocabulary::create([
+    'vid' => 'status',
+    'name' => 'Status',
+    'description' => 'Vocabulary for issue status.',
+  ]);
+  $issue_status_vocabulary->save();
+
+  // Create the issue type terms.
+  $issue_status_terms = [
+    'To Do',
+    'In Progress',
+    'In Review',
+    'Done',
+  ];
+
+  foreach ($issue_status_terms as $term_name) {
+    $term = Term::create([
+      'name' => $term_name,
+      'vid' => $issue_status_vocabulary->id(),
+    ]);
+    $term->save();
+  }
+
+  $term_fields = [
+    'field_issue_type' => 'Issue type',
+    'field_priority' => 'Priority',
+    'field_status' => 'Status'
+  ];
+
+  foreach ($term_fields as $term_field_name => $term_field_label) {
+    $term_field_storage = \Drupal::entityTypeManager()->getStorage('field_storage_config')->create([
+      'field_name' => $term_field_name,
+      'entity_type' => 'node',
+      'type' => 'entity_reference',
+      'cardinality' => 1,
+      'settings' => [
+        'target_type' => 'taxonomy_term',
+        'handler_settings' => [
+          'target_bundles' => $term_field_name == 'field_issue_type' ? 'issue_type' : ($term_field_name == 'field_priority' ? 'priority' : 'status'),
+        ],
+      ],
+    ]);
+    $term_field_storage->save();
+
+    $term_field_instance = \Drupal::entityTypeManager()->getStorage('field_config')->create([
+      'field_storage' => $term_field_storage,
+      'bundle' => 'issue',
+      'label' => $term_field_label,
+      'required' => TRUE,
+    ]);
+    $term_field_instance->save();
+
+    $form_display->setComponent($term_field_name, [
+      'type' => 'entity_reference_autocomplete',
+      'weight' => 20,
+    ]);
+  }
+
+  $form_display->save();
+
+  // Add the fields to the "Manage Display" page.
+  $view_display = \Drupal::entityTypeManager()->getStorage('entity_view_display')->load('node.' . $content_type . '.default');
+  if (!$view_display) {
+    $view_display = \Drupal::entityTypeManager()->getStorage('entity_view_display')->create([
+      'targetEntityType' => 'node',
+      'bundle' => $content_type,
+      'mode' => 'default',
+      'status' => TRUE,
+    ]);
+    $view_display->save();
+  }
+
+  $view_display->setComponent('field_reporter', [
+    'label' => 'above',
+    'type' => 'entity_reference_label',
+    'settings' => [
+      'link' => FALSE,
+    ],
+  ]);
+
+  $view_display->setComponent('short_description', [
+    'label' => 'above',
+    'type' => 'text_default',
+    'settings' => [
+      'link_to_entity' => FALSE,
+    ],
+  ]);
+
+  $view_display->setComponent('field_due_date', [
+    'label' => 'above',
+    'type' => 'datetime_default',
+    'settings' => [
+      'date_format' => 'medium',
+    ],
+  ]);
+  
+  $view_display->setComponent('field_assignee', [
+    'label' => 'above',
+    'type' => 'entity_reference_label',
+    'settings' => [
+      'link' => FALSE,
+    ],
+  ]);
+  
+  $view_display->setComponent('field_watchers', [
+    'label' => 'above',
+    'type' => 'entity_reference_label',
+    'settings' => [
+      'link' => FALSE,
+    ],
+  ]);
+  
+  $view_display->setComponent('field_issue_type', [
+    'label' => 'above',
+    'type' => 'entity_reference_label',
+    'settings' => [
+      'link' => FALSE,
+    ],
+  ]);
+  
+  $view_display->setComponent('field_priority', [
+    'label' => 'above',
+    'type' => 'entity_reference_label',
+    'settings' => [
+      'link' => FALSE,
+    ],
+  ]);
+  
+  $view_display->setComponent('field_status', [
+    'label' => 'above',
+    'type' => 'entity_reference_label',
+    'settings' => [
+      'link' => FALSE,
+    ],
+  ]);
+  
+  $view_display->setComponent('field_comments', [
+    'label' => 'above',
+    'type' => 'comment_default',
+    'settings' => [
+      'title' => 'Comments',
+      'comments_per_page' => '50',
+    ],
+  ]);
+
+  $view_display->save();
+}
